@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: telegram-anon-bot
+    env: python
+    plan: free
+    region: frankfurt  # или singapore, oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: 8260705298:AAENyMKweAnwU_lV59_9lh00Rt-Wahu43bg
+        sync: false
