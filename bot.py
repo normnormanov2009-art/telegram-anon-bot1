@@ -3,19 +3,16 @@ import asyncio
 import logging
 import sys
 
-from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
-from aiogram.filters import Command
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram import Bot, Dispatcher, types
+from aiogram.dispatcher import FSMContext
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.utils import executor
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.dispatcher.filters import Command
 
 # Получаем токен из переменных окружения
 TOKEN = os.getenv(
-    "BOT_TOKEN",
+    "BOT_TOKEN", 
     "8260705298:AAENyMKweAnwU_lV59_9lh00Rt-Wahu43bg"
 )
 
@@ -30,23 +27,19 @@ logger = logging.getLogger(__name__)
 # Создаем бота и диспетчер
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-router = Router()
-dp.include_router(router)  # ✅ Добавили роутер в диспетчер
+dp = Dispatcher(bot, storage=storage)
 
 CREATOR_ID = 1344785777
 
-
-class MessageStates(StatesGroup):
-    waiting_for_message = State()
-    waiting_for_reply = State()
-
+# В aiogram 2.x нет StatesGroup, поэтому определим состояния как класс
+class MessageStates:
+    waiting_for_message = 'waiting_for_message'
+    waiting_for_reply = 'waiting_for_reply'
 
 messages_db = {}
 
-
-@router.message(Command("start"))
-async def cmd_start(message: Message):
+@dp.message_handler(Command("start"))
+async def cmd_start(message: types.Message):
     welcome_text = """👋 Анонимный Бот для Сообщений
 
 ✨ Send anonymous messages to the bot creator!
@@ -69,8 +62,8 @@ async def cmd_start(message: Message):
     await message.answer(welcome_text)
 
 
-@router.message(Command("info"))
-async def cmd_info(message: Message):
+@dp.message_handler(Command("info"))
+async def cmd_info(message: types.Message):
     info_text = """🤖 Анонимный Бот для Сообщений
 
 Версия 1.2
@@ -83,7 +76,7 @@ async def cmd_info(message: Message):
 
 📊 Статистика:
 • Данный бот не собирает никакой информации о пользователях.
-• Создатель видит только текст сообщений без каких-либо данных
+• Создатель видит только текст сообщений без каких-либо данных 
   об отправителе.
 
 🛠️ Создатель:
@@ -101,8 +94,8 @@ async def cmd_info(message: Message):
     await message.answer(info_text, parse_mode="HTML")
 
 
-@router.message(Command("send"))
-async def cmd_send(message: Message, state: FSMContext):
+@dp.message_handler(Command("send"))
+async def cmd_send(message: types.Message):
     instructions = """✍️ Составьте ваше анонимное сообщение:
 
 • Напишите ваше сообщение ниже (макс. 4000 символов)
@@ -112,11 +105,11 @@ async def cmd_send(message: Message, state: FSMContext):
 Ваше сообщение будет доставлено полностью анонимно.
 """
     await message.answer(instructions)
-    await state.set_state(MessageStates.waiting_for_message)
+    await MessageStates.waiting_for_message.set()
 
 
-@router.message(MessageStates.waiting_for_message)
-async def process_anonymous_message(message: Message, state: FSMContext):
+@dp.message_handler(state=MessageStates.waiting_for_message)
+async def process_anonymous_message(message: types.Message, state: FSMContext):
     if not message.text:
         await message.answer("❌ Пожалуйста, отправьте текстовое сообщение.")
         return
@@ -127,13 +120,14 @@ async def process_anonymous_message(message: Message, state: FSMContext):
         await message.answer(msg)
         return
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
         InlineKeyboardButton(
             text="✅ Подтвердить",
             callback_data=f"confirm_{message.message_id}"
         ),
         InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")
-    ]])
+    )
 
     await message.answer(
         f"📝 Предпросмотр сообщения:\n\n{message.text}\n\n"
@@ -147,8 +141,8 @@ async def process_anonymous_message(message: Message, state: FSMContext):
     )
 
 
-@router.callback_query(F.data.startswith("confirm_"))
-async def confirm_message(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data.startswith("confirm_"), state="*")
+async def confirm_message(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     anonymous_message = f"""🔔 Новое Анонимное Сообщение
@@ -158,12 +152,13 @@ async def confirm_message(callback: CallbackQuery, state: FSMContext):
 Получено через Анонимный Бот
 """
 
-    reply_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+    reply_keyboard = InlineKeyboardMarkup()
+    reply_keyboard.add(
         InlineKeyboardButton(
             text="💬 Ответить Анонимно",
             callback_data=f"reply_{data.get('sender_id', 0)}"
         )
-    ]])
+    )
 
     try:
         sent_message = await bot.send_message(
@@ -205,33 +200,34 @@ _Приносим извинения за неудобства._"""
             parse_mode="Markdown"
         )
 
-    await state.clear()
+    await state.finish()
     await callback.answer()
 
 
-@router.callback_query(F.data == "cancel")
-async def cancel_message(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data == "cancel", state="*")
+async def cancel_message(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text("❌ Отправка сообщения отменена.")
-    await state.clear()
+    await state.finish()
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("reply_"))
-async def start_reply(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data.startswith("reply_"), state="*")
+async def start_reply(callback: types.CallbackQuery, state: FSMContext):
     try:
         sender_id = int(callback.data.split("_")[1])
-        await state.set_state(MessageStates.waiting_for_reply)
+        await MessageStates.waiting_for_reply.set()
         await state.update_data(
             recipient_id=sender_id,
             original_callback=callback
         )
 
-        reply_keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        reply_keyboard = InlineKeyboardMarkup()
+        reply_keyboard.add(
             InlineKeyboardButton(
                 text="❌ Отменить ответ",
                 callback_data="cancel_reply"
             )
-        ]])
+        )
 
         msg1 = "💭 Напишите ваш анонимный ответ:\n\n"
         msg2 = "Получатель не будет знать, что это от вас."
@@ -246,8 +242,8 @@ async def start_reply(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-@router.message(MessageStates.waiting_for_reply)
-async def process_reply(message: Message, state: FSMContext):
+@dp.message_handler(state=MessageStates.waiting_for_reply)
+async def process_reply(message: types.Message, state: FSMContext):
     data = await state.get_data()
 
     if not message.text:
@@ -273,48 +269,28 @@ async def process_reply(message: Message, state: FSMContext):
                "Возможно, пользователь заблокировал бота.")
         await message.answer(msg)
 
-    await state.clear()
+    await state.finish()
 
 
-@router.callback_query(F.data == "cancel_reply")
-async def cancel_reply(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query_handler(lambda c: c.data == "cancel_reply", state="*")
+async def cancel_reply(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("❌ Отправка ответа отменена.")
-    await state.clear()
+    await state.finish()
     await callback.answer()
 
 
-@router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext):
-    await state.clear()
+@dp.message_handler(Command("cancel"), state="*")
+async def cmd_cancel(message: types.Message, state: FSMContext):
+    await state.finish()
     await message.answer("❌ Действие отменено.")
 
 
-@router.message(F.text)
-async def handle_any_message(message: Message, state: FSMContext):
-    current_state = await state.get_state()
-
-    if current_state is None:
-        msg1 = "ℹ️ Напишите /send чтобы начать отправку анонимного сообщения\n"
-        msg2 = "Напишите /info для получения дополнительной информации"
-        await message.answer(msg1 + msg2)
-
-
-@router.errors()
-async def error_handler(event, exception):
-    logger.error(f"Произошла ошибка: {exception}")
-    return True
-
-
-async def main():
-    logger.info("🚀 Запуск Анонимного Бота для Сообщений...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+@dp.message_handler(state=None)
+async def handle_any_message(message: types.Message):
+    msg1 = "ℹ️ Напишите /send чтобы начать отправку анонимного сообщения\n"
+    msg2 = "Напишите /info для получения дополнительной информации"
+    await message.answer(msg1 + msg2)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("👋 Бот остановлен")
-    except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {e}")
+    executor.start_polling(dp, skip_updates=True)
